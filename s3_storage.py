@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 import logging
 
-# Настройка логирования
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -173,7 +173,7 @@ class S3Storage:
                 self.s3_client.delete_object(Bucket=self.bucket, Key=file_path)
                 return True
             else:
-                # Удаляем локальный файл
+
                 if os.path.exists(file_path):
                     os.remove(file_path)
                     return True
@@ -184,7 +184,6 @@ class S3Storage:
             return False
 
 
-# Создаем экземпляр с отложенной инициализацией
 s3_storage = None
 
 
