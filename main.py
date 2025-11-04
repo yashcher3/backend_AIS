@@ -1,4 +1,7 @@
 import datetime
+from fastapi import Request
+import os
+from fastapi.responses import FileResponse, RedirectResponse
 import re
 from datetime import datetime, timedelta
 import datetime as dt
@@ -60,47 +63,96 @@ app.add_middleware(
 )
 security = HTTPBearer()
 
+#
+# @app.options("/case_templates/export/")
+# @app.options("/case_templates/export-simple/")
+# @app.options("/case_templates/")
+# @app.options("/case_templates/{case_id}")
+# @app.options("/case_templates/{case_id}/stage_templates/")
+# @app.options("/users/me/")
+# async def options_handler():
+#     return JSONResponse(
+#         content={"message": "OK"},
+#         headers={
+#             "Access-Control-Allow-Origin": "http://localhost:5173",
+#             "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+#             "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With",
+#             "Access-Control-Allow-Credentials": "true",
+#         }
+#     )
+#
+# @app.options("/manager/pending-stages/")
+# async def options_manager_pending_stages():
+#     return JSONResponse(
+#         content={"message": "OK"},
+#         headers={
+#             "Access-Control-Allow-Origin": "http://localhost:5173",
+#             "Access-Control-Allow-Methods": "GET, OPTIONS",
+#             "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With",
+#             "Access-Control-Allow-Credentials": "true",
+#         }
+#     )
+#
+# @app.options("/attribute-templates/")
+# async def options_attribute_templates():
+#     return JSONResponse(
+#         content={"message": "OK"},
+#         headers={
+#             "Access-Control-Allow-Origin": "http://localhost:5173",
+#             "Access-Control-Allow-Methods": "GET, OPTIONS",
+#             "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With",
+#             "Access-Control-Allow-Credentials": "true",
+#         }
+#     )
+#
+# @app.options("/download-file/{attribute_id}")
+# async def options_download_file():
+#     return JSONResponse(
+#         content={"message": "OK"},
+#         headers={
+#             "Access-Control-Allow-Origin": "http://localhost:5173",
+#             "Access-Control-Allow-Methods": "GET, OPTIONS",
+#             "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With",
+#             "Access-Control-Allow-Credentials": "true",
+#         }
+#     )
+#
+# @app.options("/files/{file_path:path}")
+# async def options_files():
+#     return JSONResponse(
+#         content={"message": "OK"},
+#         headers={
+#             "Access-Control-Allow-Origin": "http://localhost:5173",
+#             "Access-Control-Allow-Methods": "GET, OPTIONS",
+#             "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With",
+#             "Access-Control-Allow-Credentials": "true",
+#         }
+#     )
 
-@app.options("/case_templates/export/")
-@app.options("/case_templates/export-simple/")
-@app.options("/case_templates/")
-@app.options("/case_templates/{case_id}")
-@app.options("/case_templates/{case_id}/stage_templates/")
-@app.options("/users/me/")
-async def options_handler():
-    return JSONResponse(
-        content={"message": "OK"},
-        headers={
-            "Access-Control-Allow-Origin": "http://localhost:5173",
-            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With",
-            "Access-Control-Allow-Credentials": "true",
-        }
-    )
 
-@app.options("/manager/pending-stages/")
-async def options_manager_pending_stages():
-    return JSONResponse(
-        content={"message": "OK"},
-        headers={
-            "Access-Control-Allow-Origin": "http://localhost:5173",
-            "Access-Control-Allow-Methods": "GET, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With",
-            "Access-Control-Allow-Credentials": "true",
-        }
-    )
+@app.middleware("http")
+async def catch_exceptions_middleware(request: Request, call_next):
+    try:
+        response = await call_next(request)
+        # Добавляем CORS headers ко всем ответам, даже к ошибкам
+        response.headers["Access-Control-Allow-Origin"] = "http://localhost:5173"
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With"
+        return response
+    except Exception as e:
+        # Обработка исключений с CORS headers
+        return JSONResponse(
+            status_code=500,
+            content={"detail": str(e)},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:5173",
+                "Access-Control-Allow-Credentials": "true",
+                "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With",
+            }
+        )
 
-@app.options("/attribute-templates/")
-async def options_attribute_templates():
-    return JSONResponse(
-        content={"message": "OK"},
-        headers={
-            "Access-Control-Allow-Origin": "http://localhost:5173",
-            "Access-Control-Allow-Methods": "GET, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With",
-            "Access-Control-Allow-Credentials": "true",
-        }
-    )
 
 async def simple_auth(credentials: HTTPAuthorizationCredentials = Depends(security)):
     """Упрощенная авторизация для тестирования"""
@@ -1442,6 +1494,97 @@ def delete_file(
         raise HTTPException(status_code=500, detail=f"Ошибка при удалении файла: {str(e)}")
 
 
+@app.get("/download-file/{attribute_id}")
+async def download_file_by_attribute(
+        attribute_id: int,
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(get_current_active_user)
+):
+    """Скачивание файла по ID атрибута"""
+    try:
+        # Находим атрибут
+        attribute = db.query(DBAttribute).filter(DBAttribute.id == attribute_id).first()
+        if not attribute:
+            raise HTTPException(status_code=404, detail="Атрибут не найден")
+
+        if not attribute.user_file_path:
+            raise HTTPException(status_code=404, detail="Файл не прикреплен")
+
+        # Находим этап и проверяем права
+        stage = db.query(DBStage).filter(DBStage.id == attribute.stage_id).first()
+        if not stage:
+            raise HTTPException(status_code=404, detail="Этап не найден")
+
+        # Менеджеры и администраторы имеют доступ ко всем файлам
+        if current_user['role'] not in ['admin', 'manager']:
+            raise HTTPException(status_code=403, detail="Недостаточно прав")
+
+        # Получаем файл из хранилища
+        file_url = get_s3_storage().get_file_url(attribute.user_file_path)
+
+        # Если это presigned URL от S3, перенаправляем
+        if file_url.startswith('http'):
+            from fastapi.responses import RedirectResponse
+            return RedirectResponse(url=file_url)
+        else:
+            # Для локальных файлов
+            import os
+            if os.path.exists(attribute.user_file_path):
+                from fastapi.responses import FileResponse
+                filename = os.path.basename(attribute.user_file_path)
+                return FileResponse(
+                    attribute.user_file_path,
+                    media_type='application/octet-stream',
+                    filename=filename
+                )
+            else:
+                raise HTTPException(status_code=404, detail="Файл не найден")
+
+    except Exception as e:
+        print(f"Error downloading file: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Ошибка при загрузке файла: {str(e)}")
+
+@app.get("/files/{file_path:path}")
+def serve_local_file(
+        file_path: str,
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(get_current_active_user)
+):
+    """Сервис для отдачи локальных файлов (для случая, когда S3 не доступен)"""
+    try:
+        # Базовый путь для локальных файлов
+        base_path = "uploads"
+        full_path = os.path.join(base_path, file_path)
+
+        # Проверяем существование файла
+        if not os.path.exists(full_path):
+            raise HTTPException(status_code=404, detail="Файл не найден")
+
+        # Для безопасности проверяем, что файл внутри разрешенной директории
+        if not os.path.abspath(full_path).startswith(os.path.abspath(base_path)):
+            raise HTTPException(status_code=403, detail="Доступ запрещен")
+
+        # Определяем MIME-тип
+        import mimetypes
+        mime_type, _ = mimetypes.guess_type(full_path)
+        if not mime_type:
+            mime_type = 'application/octet-stream'
+
+        filename = os.path.basename(full_path)
+
+        return FileResponse(
+            full_path,
+            media_type=mime_type,
+            filename=filename
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ошибка при загрузке файла: {str(e)}")
+
+
+
 @app.get("/debug/executors")
 def debug_executors(db: Session = Depends(get_db)):
     """Диагностический эндпоинт для проверки исполнителей"""
@@ -1709,7 +1852,6 @@ def get_manager_pending_stages(
         print(f"Manager {current_user['username']} viewing pending stages")
 
         # Находим этапы со статусом waiting_approval и правилом manager_closing
-        # ИСПРАВЛЕНО: добавляем загрузку атрибутов и шаблонов атрибутов
         from sqlalchemy.orm import joinedload
 
         stages = db.query(DBStage).options(
@@ -1748,16 +1890,11 @@ def get_manager_pending_stages(
                 completed_by=stage.completed_by,
                 manager_comment=stage.manager_comment,
                 case_name=stage.case.name if stage.case else f"Дело #{stage.case_id}",
-                attributes=attributes_response  # ИСПРАВЛЕНО: передаем реальные атрибуты
+                attributes=attributes_response
             )
             result.append(stage_data)
 
         print(f"Found {len(result)} stages pending approval")
-
-        print(f"Stage {stage.id} has {len(stage.attributes)} attributes")
-        for attr in stage.attributes:
-            print(f"  Attribute {attr.id}: text='{attr.user_text}', file='{attr.user_file_path}'")
-
         return result
 
     except Exception as e:
@@ -1765,6 +1902,7 @@ def get_manager_pending_stages(
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Ошибка при получении этапов: {str(e)}")
+
 
 @app.post("/stages/{stage_id}/manager-approve/")
 def manager_approve_stage(
