@@ -8,14 +8,13 @@ from fastapi import FastAPI, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 import json
 from typing import List, Optional
-from fastapi.middleware.cors import CORSMiddleware
+
 from fastapi.responses import JSONResponse
 from datetime import timedelta
 
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import JWTError, jwt
 
-from fastapi import Request
 
 
 from database import get_db, engine
@@ -51,13 +50,7 @@ Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Case Management API")
 
-# Создаем таблицы
-Base.metadata.create_all(bind=engine)
 
-
-
-
-# ДОБАВЬТЕ ЭТО ПЕРЕД ВСЕМИ ДРУГИМИ МИДЛВАРАМИ
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://localhost:3000", "http://localhost:3001"],
@@ -67,18 +60,7 @@ app.add_middleware(
 )
 security = HTTPBearer()
 
-# @app.middleware("http")
-# async def add_cors_headers(request: Request, call_next):
-#     response = await call_next(request)
-#
-#     response.headers["Access-Control-Allow-Origin"] = "http://localhost:5173"
-#     response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
-#     response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With"
-#     response.headers["Access-Control-Allow-Credentials"] = "true"
-#
-#     return response
 
-# ОБНОВЛЕННЫЕ ОБРАБОТЧИКИ OPTIONS С НОВЫМИ URL
 @app.options("/case_templates/export/")
 @app.options("/case_templates/export-simple/")
 @app.options("/case_templates/")
@@ -148,7 +130,7 @@ async def simple_auth(credentials: HTTPAuthorizationCredentials = Depends(securi
         print(f"JWTError: {str(e)}")
         raise HTTPException(status_code=401, detail=f"Token error: {str(e)}")
 
-# Эндпоинты аутентификации (без изменений)
+
 @app.post("/token", response_model=Token)
 async def login_for_access_token(form_data: UserCreate):
     user = authenticate_user(form_data.username, form_data.password)
@@ -189,7 +171,6 @@ async def read_users_me(current_user: dict = Depends(simple_auth)):
         "is_active": current_user.get("is_active", True)
     }
 
-# ОБНОВЛЕННЫЕ ЭНДПОИНТЫ С НОВЫМИ URL
 
 @app.post("/case_templates/export/", response_model=CaseTemplateResponse)
 def export_case_template(
@@ -223,7 +204,7 @@ def export_case_template(
                     detail=f"Этап {stage.id}: количество названий полей ({total_templates}) не соответствует количеству полей ({total_fields})"
                 )
 
-        # Создаем шаблон дела
+
         db_case_template = DBCaseTemplate(
             name=export_data.name,
             description=export_data.description,
@@ -272,7 +253,7 @@ def export_case_template(
         print("Error:", str(e))
         raise HTTPException(status_code=500, detail=f"Ошибка при экспорте дела: {str(e)}")
 
-# ЭНДПОИНТЫ ДЛЯ ШАБЛОНОВ АТРИБУТОВ С ОБНОВЛЕННЫМИ URL
+
 @app.post("/stage_templates/{stage_id}/attribute_templates/", response_model=List[AttributeTemplateResponse])
 def save_attribute_templates(
         stage_id: str,
@@ -1502,8 +1483,6 @@ def get_executor_stages(
             DBStage.status.in_(['in_progress', 'waiting_approval', 'rework'])
         ).all()
 
-        print(f"Found {len(stages)} stages for executor {current_user['username']}")
-
         result = []
         for stage in stages:
             case = db.query(DBCase).filter(DBCase.id == stage.case_id).first()
@@ -1575,7 +1554,7 @@ def complete_stage(
             print(f"DEBUG: Case {stage.case_id} not found")
             raise HTTPException(status_code=404, detail="Дело не найдено")
 
-        print(f"DEBUG: Case found - ID: {case.id}, Name: {case.name}, Current stage: {case.current_stage}")
+
 
         # ОБНОВЛЕНО: Логика перехода только для executor_closing
         next_stage_id = None

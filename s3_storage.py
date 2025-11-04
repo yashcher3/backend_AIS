@@ -30,7 +30,7 @@ class S3Storage:
         self._initialize()
 
     def _initialize(self):
-        """Инициализация S3 клиента с обработкой ошибок"""
+
         try:
             logger.info("Инициализация S3 клиента...")
             self.s3_client = boto3.client('s3', **S3_CONFIG)
