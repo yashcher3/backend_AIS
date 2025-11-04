@@ -1721,25 +1721,41 @@ def create_attributes_batch(
 def get_manager_pending_stages(
         db: Session = Depends(get_db),
         current_user: dict = Depends(get_current_active_user)
-        # ИЗМЕНЕНО: используем get_current_active_user вместо require_admin_or_manager
 ):
     """Получение этапов, ожидающих утверждения менеджера"""
     try:
-        # ДОБАВЛЕНО: проверка прав вручную
         if current_user['role'] not in ['admin', 'manager']:
             raise HTTPException(status_code=403, detail="Недостаточно прав")
 
         print(f"Manager {current_user['username']} viewing pending stages")
 
         # Находим этапы со статусом waiting_approval и правилом manager_closing
-        stages = db.query(DBStage).join(DBCase).filter(
+        # ИСПРАВЛЕНО: добавляем загрузку атрибутов и шаблонов атрибутов
+        from sqlalchemy.orm import joinedload
+
+        stages = db.query(DBStage).options(
+            joinedload(DBStage.attributes).joinedload(DBAttribute.attribute_template)
+        ).join(DBCase).filter(
             DBStage.status == 'waiting_approval',
             DBStage.closing_rule == 'manager_closing'
         ).all()
 
         result = []
         for stage in stages:
-            # Создаем объект StageWithCaseInfo без дублирования case_id
+            # Формируем список атрибутов для этапа
+            attributes_response = []
+            for attr in stage.attributes:
+                attributes_response.append(AttributeResponse(
+                    id=attr.id,
+                    stage_id=attr.stage_id,
+                    attribute_template_id=attr.attribute_template_id,
+                    user_text=attr.user_text,
+                    user_file_path=attr.user_file_path,
+                    created_at=attr.created_at,
+                    updated_at=attr.updated_at
+                ))
+
+            # Создаем объект StageWithCaseInfo
             stage_data = StageWithCaseInfo(
                 id=stage.id,
                 case_id=stage.case_id,
@@ -1753,11 +1769,16 @@ def get_manager_pending_stages(
                 completed_by=stage.completed_by,
                 manager_comment=stage.manager_comment,
                 case_name=stage.case.name if stage.case else f"Дело #{stage.case_id}",
-                attributes=[]
+                attributes=attributes_response  # ИСПРАВЛЕНО: передаем реальные атрибуты
             )
             result.append(stage_data)
 
         print(f"Found {len(result)} stages pending approval")
+
+        print(f"Stage {stage.id} has {len(stage.attributes)} attributes")
+        for attr in stage.attributes:
+            print(f"  Attribute {attr.id}: text='{attr.user_text}', file='{attr.user_file_path}'")
+
         return result
 
     except Exception as e:
