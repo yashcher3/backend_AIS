@@ -265,12 +265,12 @@ class StageResponse(StageBase):
     status: str
     completed_at: Optional[datetime] = None
     completed_by: Optional[str] = None
+    manager_comment: Optional[str] = None  # Убедитесь, что это поле есть
     attributes: List[AttributeResponse] = []
-    case: Optional[CaseSimple] = None  # Используем упрощенную модель
+    case: Optional[CaseSimple] = None
 
     class Config:
         from_attributes = True
-
 
 
 class StageApprovalRequest(BaseModel):

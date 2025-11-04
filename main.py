@@ -17,9 +17,9 @@ from datetime import timedelta
 
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import JWTError, jwt
+from fastapi.responses import Response
 
-
-
+from fastapi.responses import Response
 from database import get_db, engine
 
 from models import (
@@ -1028,6 +1028,130 @@ def delete_case(
         raise HTTPException(status_code=500, detail=f"Ошибка при удалении дела: {str(e)}")
 
 
+@app.get("/download-file/{attribute_id}")
+async def download_file_by_attribute(
+        attribute_id: int,
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(get_current_active_user)
+):
+    """Скачивание файла по ID атрибута"""
+    try:
+        # Находим атрибут
+        attribute = db.query(DBAttribute).filter(DBAttribute.id == attribute_id).first()
+        if not attribute:
+            raise HTTPException(status_code=404, detail="Атрибут не найден")
+
+        if not attribute.user_file_path:
+            raise HTTPException(status_code=404, detail="Файл не прикреплен")
+
+        # Находим этап и проверяем права
+        stage = db.query(DBStage).filter(DBStage.id == attribute.stage_id).first()
+        if not stage:
+            raise HTTPException(status_code=404, detail="Этап не найден")
+
+        # Менеджеры и администраторы имеют доступ ко всем файлам
+        if current_user['role'] not in ['admin', 'manager']:
+            raise HTTPException(status_code=403, detail="Недостаточно прав")
+
+        # Получаем файл из хранилища
+        storage = get_s3_storage()
+
+        # Если файл в S3
+        if storage.available and attribute.user_file_path.startswith('cases/'):
+            try:
+                # Получаем объект из S3
+                s3_object = storage.s3_client.get_object(
+                    Bucket=storage.bucket,
+                    Key=attribute.user_file_path
+                )
+
+                # Получаем содержимое файла
+                file_content = s3_object['Body'].read()
+                filename = os.path.basename(attribute.user_file_path)
+
+                # Определяем MIME-тип
+                import mimetypes
+                mime_type, _ = mimetypes.guess_type(filename)
+                if not mime_type:
+                    mime_type = 'application/octet-stream'
+
+                # Возвращаем файл как поток
+                from fastapi.responses import Response
+                return Response(
+                    content=file_content,
+                    media_type=mime_type,
+                    headers={
+                        'Content-Disposition': f'attachment; filename="{filename}"',
+                        'Content-Type': mime_type
+                    }
+                )
+
+            except Exception as s3_error:
+                print(f"S3 error: {s3_error}")
+                raise HTTPException(status_code=500, detail="Ошибка при загрузке файла из S3")
+
+        else:
+            # Локальный файл
+            if os.path.exists(attribute.user_file_path):
+                filename = os.path.basename(attribute.user_file_path)
+
+                # Определяем MIME-тип
+                import mimetypes
+                mime_type, _ = mimetypes.guess_type(filename)
+                if not mime_type:
+                    mime_type = 'application/octet-stream'
+
+                # Читаем файл и возвращаем как Response
+                with open(attribute.user_file_path, 'rb') as file:
+                    file_content = file.read()
+                from fastapi.responses import Response
+
+                return Response(
+                    content=file_content,
+                    media_type=mime_type,
+                    headers={
+                        'Content-Disposition': f'attachment; filename="{filename}"',
+                        'Content-Type': mime_type
+                    }
+                )
+            else:
+                raise HTTPException(status_code=404, detail="Файл не найден")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error downloading file: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Ошибка при загрузке файла: {str(e)}")
+
+#
+# @app.post("/stages/{stage_id}/rework-submit/")
+# def submit_rework(
+#         stage_id: int,
+#         db: Session = Depends(get_db),
+#         current_user: dict = Depends(get_current_active_user)
+# ):
+#     """Отправка исправленного этапа на проверку после доработки"""
+#     try:
+#         stage = db.query(DBStage).filter(DBStage.id == stage_id).first()
+#         if not stage:
+#             raise HTTPException(status_code=404, detail="Этап не найден")
+#
+#         if stage.status != 'rework':
+#             raise HTTPException(status_code=400, detail="Этап не находится на доработке")
+#
+#         if stage.executor != current_user['username']:
+#             raise HTTPException(status_code=403, detail="Нет доступа к этому этапу")
+#
+#         # Меняем статус обратно на waiting_approval
+#         stage.status = 'waiting_approval'
+#         db.commit()
+#
+#         return {"message": "Исправления отправлены на проверку"}
+#
+#     except Exception as e:
+#         db.rollback()
+#         raise HTTPException(status_code=500, detail=f"Ошибка при отправке исправлений: {str(e)}")
+
 # ЭНДПОИНТЫ ДЛЯ ЗАГРУЗКИ ФАЙЛОВ
 @app.post("/upload-file/", response_model=FileUploadResponse)
 async def upload_file(
@@ -1080,6 +1204,40 @@ def get_stages(
 
     stages = query.offset(skip).limit(limit).all()
     return stages
+
+
+@app.post("/stages/{stage_id}/rework-submit/")
+def submit_rework(
+        stage_id: int,
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(get_current_active_user)
+):
+    """Отправка исправленного этапа на проверку после доработки"""
+    try:
+        stage = db.query(DBStage).filter(DBStage.id == stage_id).first()
+        if not stage:
+            raise HTTPException(status_code=404, detail="Этап не найден")
+
+        if stage.status != 'rework':
+            raise HTTPException(status_code=400, detail="Этап не находится на доработке")
+
+        if stage.executor != current_user['username']:
+            raise HTTPException(status_code=403, detail="Нет доступа к этому этапу")
+
+        # Меняем статус обратно на waiting_approval
+        stage.status = 'waiting_approval'
+        # Очищаем комментарий менеджера при повторной отправке
+        stage.manager_comment = None
+        db.commit()
+
+        return {"message": "Исправления отправлены на проверку руководителю"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        print(f"Error in rework-submit: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Ошибка при отправке исправлений: {str(e)}")
 
 
 @app.get("/stages/{stage_id}", response_model=StageResponse)
@@ -1243,27 +1401,79 @@ def update_attribute(
 
 
 @app.delete("/attributes/{attribute_id}")
+# def delete_attribute(
+#         attribute_id: int,
+#         db: Session = Depends(get_db),
+#         current_user: dict = Depends(require_admin_or_manager)
+# ):
+#     """Удаление атрибута"""
+#     attribute = db.query(DBAttribute).filter(DBAttribute.id == attribute_id).first()
+#     if not attribute:
+#         raise HTTPException(status_code=404, detail="Атрибут не найден")
+#
+#     try:
+#         # Удаляем файл из S3 если есть
+#         if attribute.user_file_path:
+#             s3_storage.delete_file(attribute.user_file_path)
+#
+#         db.delete(attribute)
+#         db.commit()
+#         return {"message": f"Атрибут {attribute_id} удален"}
+#
+#     except Exception as e:
+#         db.rollback()
+#         raise HTTPException(status_code=500, detail=f"Ошибка при удалении атрибута: {str(e)}")
+
+
+@app.delete("/attributes/{attribute_id}")
 def delete_attribute(
-        attribute_id: int,
-        db: Session = Depends(get_db),
-        current_user: dict = Depends(require_admin_or_manager)
+    attribute_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_active_user)
 ):
-    """Удаление атрибута"""
-    attribute = db.query(DBAttribute).filter(DBAttribute.id == attribute_id).first()
-    if not attribute:
-        raise HTTPException(status_code=404, detail="Атрибут не найден")
-
+    """Удаление атрибута с проверкой прав доступа"""
     try:
-        # Удаляем файл из S3 если есть
+        attribute = db.query(DBAttribute).filter(DBAttribute.id == attribute_id).first()
+        if not attribute:
+            raise HTTPException(status_code=404, detail="Атрибут не найден")
+
+        # Находим этап и проверяем права
+        stage = db.query(DBStage).filter(DBStage.id == attribute.stage_id).first()
+        if not stage:
+            raise HTTPException(status_code=404, detail="Этап не найден")
+
+        # Проверяем права доступа
+        if stage.executor != current_user['username'] and current_user['role'] not in ['admin', 'manager']:
+            raise HTTPException(status_code=403, detail="Нет доступа к этому атрибуту")
+
+        # Проверяем, что этап можно редактировать (in_progress или rework)
+        if stage.status not in ['in_progress', 'rework']:
+            raise HTTPException(
+                status_code=400,
+                detail="Нельзя редактировать атрибуты завершенного этапа"
+            )
+
+        # Удаляем файл из хранилища если есть
         if attribute.user_file_path:
-            s3_storage.delete_file(attribute.user_file_path)
+            try:
+                success = get_s3_storage().delete_file(attribute.user_file_path)
+                if not success:
+                    print(f"Предупреждение: не удалось удалить файл {attribute.user_file_path}")
+            except Exception as file_error:
+                print(f"Ошибка при удалении файла: {file_error}")
+                # Продолжаем удаление атрибута даже если файл не удален
 
-        db.delete(attribute)
+        # Обновляем атрибут (очищаем file_path и оставляем текст если есть)
+        attribute.user_file_path = None
         db.commit()
-        return {"message": f"Атрибут {attribute_id} удален"}
 
+        return {"message": "Файл удален из атрибута"}
+
+    except HTTPException:
+        raise
     except Exception as e:
         db.rollback()
+        print(f"Error deleting attribute: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Ошибка при удалении атрибута: {str(e)}")
 
 
@@ -1417,40 +1627,52 @@ async def options_cases():
         }
     )
 
+@app.options("/stages/{stage_id}/rework-submit/")
+async def options_rework_submit():
+    return JSONResponse(
+        content={"message": "OK"},
+        headers={
+            "Access-Control-Allow-Origin": "http://localhost:5173",
+            "Access-Control-Allow-Methods": "POST, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With",
+            "Access-Control-Allow-Credentials": "true",
+        }
+    )
 
 
-@app.delete("/attributes/{attribute_id}")
-def delete_attribute(
-        attribute_id: int,
-        db: Session = Depends(get_db),
-        current_user: dict = Depends(get_current_active_user)
-):
-    """Удаление атрибута"""
-    attribute = db.query(DBAttribute).filter(DBAttribute.id == attribute_id).first()
-    if not attribute:
-        raise HTTPException(status_code=404, detail="Атрибут не найден")
-
-    # Проверяем права доступа через этап
-    stage = db.query(DBStage).filter(DBStage.id == attribute.stage_id).first()
-    if not stage:
-        raise HTTPException(status_code=404, detail="Этап не найден")
-
-    if stage.executor != current_user['username']:
-        raise HTTPException(status_code=403, detail="Нет доступа к этому атрибуту")
-
-    try:
-        # Удаляем файл из хранилища если есть
-        if attribute.user_file_path:
-            get_s3_storage().delete_file(attribute.user_file_path)
-
-        db.delete(attribute)
-        db.commit()
-
-        return {"message": "Атрибут удален"}
-
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"Ошибка при удалении атрибута: {str(e)}")
+#
+# @app.delete("/attributes/{attribute_id}")
+# def delete_attribute(
+#         attribute_id: int,
+#         db: Session = Depends(get_db),
+#         current_user: dict = Depends(get_current_active_user)
+# ):
+#     """Удаление атрибута"""
+#     attribute = db.query(DBAttribute).filter(DBAttribute.id == attribute_id).first()
+#     if not attribute:
+#         raise HTTPException(status_code=404, detail="Атрибут не найден")
+#
+#     # Проверяем права доступа через этап
+#     stage = db.query(DBStage).filter(DBStage.id == attribute.stage_id).first()
+#     if not stage:
+#         raise HTTPException(status_code=404, detail="Этап не найден")
+#
+#     if stage.executor != current_user['username']:
+#         raise HTTPException(status_code=403, detail="Нет доступа к этому атрибуту")
+#
+#     try:
+#         # Удаляем файл из хранилища если есть
+#         if attribute.user_file_path:
+#             get_s3_storage().delete_file(attribute.user_file_path)
+#
+#         db.delete(attribute)
+#         db.commit()
+#
+#         return {"message": "Атрибут удален"}
+#
+#     except Exception as e:
+#         db.rollback()
+#         raise HTTPException(status_code=500, detail=f"Ошибка при удалении атрибута: {str(e)}")
 
 
 @app.get("/stages/{stage_id}/attributes/")
@@ -1494,55 +1716,7 @@ def delete_file(
         raise HTTPException(status_code=500, detail=f"Ошибка при удалении файла: {str(e)}")
 
 
-@app.get("/download-file/{attribute_id}")
-async def download_file_by_attribute(
-        attribute_id: int,
-        db: Session = Depends(get_db),
-        current_user: dict = Depends(get_current_active_user)
-):
-    """Скачивание файла по ID атрибута"""
-    try:
-        # Находим атрибут
-        attribute = db.query(DBAttribute).filter(DBAttribute.id == attribute_id).first()
-        if not attribute:
-            raise HTTPException(status_code=404, detail="Атрибут не найден")
 
-        if not attribute.user_file_path:
-            raise HTTPException(status_code=404, detail="Файл не прикреплен")
-
-        # Находим этап и проверяем права
-        stage = db.query(DBStage).filter(DBStage.id == attribute.stage_id).first()
-        if not stage:
-            raise HTTPException(status_code=404, detail="Этап не найден")
-
-        # Менеджеры и администраторы имеют доступ ко всем файлам
-        if current_user['role'] not in ['admin', 'manager']:
-            raise HTTPException(status_code=403, detail="Недостаточно прав")
-
-        # Получаем файл из хранилища
-        file_url = get_s3_storage().get_file_url(attribute.user_file_path)
-
-        # Если это presigned URL от S3, перенаправляем
-        if file_url.startswith('http'):
-            from fastapi.responses import RedirectResponse
-            return RedirectResponse(url=file_url)
-        else:
-            # Для локальных файлов
-            import os
-            if os.path.exists(attribute.user_file_path):
-                from fastapi.responses import FileResponse
-                filename = os.path.basename(attribute.user_file_path)
-                return FileResponse(
-                    attribute.user_file_path,
-                    media_type='application/octet-stream',
-                    filename=filename
-                )
-            else:
-                raise HTTPException(status_code=404, detail="Файл не найден")
-
-    except Exception as e:
-        print(f"Error downloading file: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Ошибка при загрузке файла: {str(e)}")
 
 @app.get("/files/{file_path:path}")
 def serve_local_file(
@@ -1626,9 +1800,26 @@ def get_executor_stages(
             DBStage.status.in_(['in_progress', 'waiting_approval', 'rework'])
         ).all()
 
+        print(f"Found {len(stages)} stages for executor {current_user['username']}")
+
         result = []
         for stage in stages:
             case = db.query(DBCase).filter(DBCase.id == stage.case_id).first()
+
+            # Загружаем атрибуты для этапа
+            attributes = db.query(DBAttribute).filter(DBAttribute.stage_id == stage.id).all()
+            attributes_response = []
+            for attr in attributes:
+                attributes_response.append(AttributeResponse(
+                    id=attr.id,
+                    stage_id=attr.stage_id,
+                    attribute_template_id=attr.attribute_template_id,
+                    user_text=attr.user_text,
+                    user_file_path=attr.user_file_path,
+                    created_at=attr.created_at,
+                    updated_at=attr.updated_at
+                ))
+
             result.append(StageResponse(
                 id=stage.id,
                 case_id=stage.case_id,
@@ -1640,7 +1831,9 @@ def get_executor_stages(
                 next_stage_rule=stage.next_stage_rule,
                 status=stage.status,
                 completed_at=stage.completed_at,
-                completed_by=stage.completed_by
+                completed_by=stage.completed_by,
+                manager_comment=stage.manager_comment,  # ВАЖНО: добавляем комментарий менеджера
+                attributes=attributes_response
             ))
 
         return result
@@ -1648,6 +1841,7 @@ def get_executor_stages(
     except Exception as e:
         print(f"Error in get_executor_stages: {e}")
         raise HTTPException(status_code=500, detail=f"Ошибка при получении этапов исполнителя: {str(e)}")
+
 
 @app.post("/stages/{stage_id}/complete/")
 def complete_stage(
@@ -2020,6 +2214,109 @@ def manager_return_for_rework(
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Ошибка при возврате этапа: {str(e)}")
+
+
+
+
+@app.get("/download-file/{attribute_id}")
+async def download_file_by_attribute(
+        attribute_id: int,
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(get_current_active_user)
+):
+    """Скачивание файла по ID атрибута"""
+    try:
+        # Находим атрибут
+        attribute = db.query(DBAttribute).filter(DBAttribute.id == attribute_id).first()
+        if not attribute:
+            raise HTTPException(status_code=404, detail="Атрибут не найден")
+
+        if not attribute.user_file_path:
+            raise HTTPException(status_code=404, detail="Файл не прикреплен")
+
+        # Находим этап и проверяем права
+        stage = db.query(DBStage).filter(DBStage.id == attribute.stage_id).first()
+        if not stage:
+            raise HTTPException(status_code=404, detail="Этап не найден")
+
+        # Менеджеры и администраторы имеют доступ ко всем файлам
+        if current_user['role'] not in ['admin', 'manager']:
+            raise HTTPException(status_code=403, detail="Недостаточно прав")
+
+        # Получаем файл из хранилища
+        storage = get_s3_storage()
+
+        # Если файл в S3
+        if storage.available and attribute.user_file_path.startswith('cases/'):
+            try:
+                # Получаем объект из S3
+                s3_object = storage.s3_client.get_object(
+                    Bucket=storage.bucket,
+                    Key=attribute.user_file_path
+                )
+
+                # Получаем содержимое файла
+                file_content = s3_object['Body'].read()
+                filename = os.path.basename(attribute.user_file_path)
+
+                # Определяем MIME-тип
+                import mimetypes
+                mime_type, _ = mimetypes.guess_type(filename)
+                if not mime_type:
+                    mime_type = 'application/octet-stream'
+
+                # Возвращаем файл как поток
+                from fastapi.responses import Response
+                return Response(
+                    content=file_content,
+                    media_type=mime_type,
+                    headers={
+                        'Content-Disposition': f'attachment; filename="{filename}"',
+                        'Content-Type': mime_type
+                    }
+                )
+
+            except Exception as s3_error:
+                print(f"S3 error: {s3_error}")
+                raise HTTPException(status_code=500, detail="Ошибка при загрузке файла из S3")
+
+        else:
+            # Локальный файл
+            if os.path.exists(attribute.user_file_path):
+                filename = os.path.basename(attribute.user_file_path)
+
+                # Определяем MIME-тип
+                import mimetypes
+                mime_type, _ = mimetypes.guess_type(filename)
+                if not mime_type:
+                    mime_type = 'application/octet-stream'
+
+                # Читаем файл и возвращаем как Response
+                with open(attribute.user_file_path, 'rb') as file:
+                    file_content = file.read()
+                from fastapi.responses import Response
+
+                return Response(
+                    content=file_content,
+                    media_type=mime_type,
+                    headers={
+                        'Content-Disposition': f'attachment; filename="{filename}"',
+                        'Content-Type': mime_type
+                    }
+                )
+            else:
+                raise HTTPException(status_code=404, detail="Файл не найден")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error downloading file: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Ошибка при загрузке файла: {str(e)}")
+
+
+
+
+
 
 
 try:
