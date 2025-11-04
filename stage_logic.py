@@ -26,3 +26,4 @@ def get_next_stage(current_stage: str, condition_result: Optional[str] = None) -
 
 def validate_stage_format(stage: str) -> bool:
     return bool(re.match(r'^\d+(\.\d+)*$', stage))
+# /home/maxim/PycharmProjects/Backend_AIS/data/flowchart.db
