@@ -16,11 +16,7 @@ def get_next_stage_number(current_stage: str, condition_result: Optional[str] = 
         return "1"
 
     parts = parse_stage_number(current_stage)
-
-    # Увеличиваем основной номер этапа (первое число)
     parts[0] += 1
-
-    # Сохраняем остальные числа (глубину вложенности и ветвление)
     return format_stage_number(parts)
 
 
@@ -69,11 +65,10 @@ def validate_stage_transition(current_stage: str, next_stage: str) -> bool:
     current_parts = parse_stage_number(current_stage)
     next_parts = parse_stage_number(next_stage)
 
-    # Проверяем увеличение основного номера
+
     if next_parts[0] != current_parts[0] + 1:
         return False
 
-    # Проверяем сохранение пути вложенности
     if len(current_parts) > 1:
         if len(next_parts) < 2:
             return False

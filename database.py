@@ -2,7 +2,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 import os
 
-# Для NixOS - используем абсолютный путь
+
 DB_PATH = os.path.join(os.path.dirname(__file__), "cases.db")
 SQLALCHEMY_DATABASE_URL = f"sqlite:///{DB_PATH}"
 

@@ -34,8 +34,6 @@ class S3Storage:
         try:
             logger.info("Инициализация S3 клиента...")
             self.s3_client = boto3.client('s3', **S3_CONFIG)
-
-            # Проверяем подключение
             self.s3_client.list_buckets()
             logger.info("S3 клиент успешно инициализирован")
 
