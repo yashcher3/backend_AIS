@@ -96,3 +96,4 @@ class UserPermissions(BaseModel):
     can_manage_cases: bool
     can_view_executors: bool
     role: str
+

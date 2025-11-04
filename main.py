@@ -29,7 +29,7 @@ from models import (
     CaseCreate, CaseResponse, CaseUpdate, CaseFilter,
     StageCreate, StageResponse, StageUpdate, StageFilter,
     AttributeCreate, AttributeResponse, AttributeUpdate,
-    FileUploadResponse, PaginatedCaseResponse
+    FileUploadResponse, PaginatedCaseResponse, StageApprovalRequest, StageWithCaseInfo
 )
 from stage_logic import get_next_stage, validate_stage_format
 from s3_storage import s3_storage
@@ -41,15 +41,23 @@ from auth_config import authenticate_user, create_access_token, ACCESS_TOKEN_EXP
 from auth_config import get_user
 from auth_deps import get_current_active_user, require_role
 
-
+from fastapi.middleware.cors import CORSMiddleware
 from stage_numbering import get_next_stage_number, validate_stage_transition, get_child_stages, get_stage_hierarchy
 
 # Создаем таблицы
 Base.metadata.create_all(bind=engine)
 
+
+
 app = FastAPI(title="Case Management API")
 
-# Добавляем CORS middleware для работы с фронтендом
+# Создаем таблицы
+Base.metadata.create_all(bind=engine)
+
+
+
+
+# ДОБАВЬТЕ ЭТО ПЕРЕД ВСЕМИ ДРУГИМИ МИДЛВАРАМИ
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://localhost:3000", "http://localhost:3001"],
@@ -59,16 +67,16 @@ app.add_middleware(
 )
 security = HTTPBearer()
 
-@app.middleware("http")
-async def add_cors_headers(request: Request, call_next):
-    response = await call_next(request)
-
-    response.headers["Access-Control-Allow-Origin"] = "http://localhost:5173"
-    response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
-    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With"
-    response.headers["Access-Control-Allow-Credentials"] = "true"
-
-    return response
+# @app.middleware("http")
+# async def add_cors_headers(request: Request, call_next):
+#     response = await call_next(request)
+#
+#     response.headers["Access-Control-Allow-Origin"] = "http://localhost:5173"
+#     response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
+#     response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With"
+#     response.headers["Access-Control-Allow-Credentials"] = "true"
+#
+#     return response
 
 # ОБНОВЛЕННЫЕ ОБРАБОТЧИКИ OPTIONS С НОВЫМИ URL
 @app.options("/case_templates/export/")
@@ -756,6 +764,7 @@ def get_cases(
 ):
     """Получение списка дел с пагинацией, сортировкой и фильтрацией"""
     from sqlalchemy.orm import joinedload
+    from sqlalchemy import and_
 
     # Базовый запрос с подгрузкой этапов
     query = db.query(DBCase).options(joinedload(DBCase.stages))
@@ -767,8 +776,18 @@ def get_cases(
         query = query.filter(DBCase.case_template_id == case_template_id)
     if status:
         query = query.filter(DBCase.status == status)
-    if executor:
-        query = query.join(DBStage).filter(DBStage.executor == executor)
+
+    # ИЗМЕНЕНИЕ: Фильтрация по исполнителю ТЕКУЩЕГО этапа
+    if executor and executor != 'all':
+        # Создаем подзапрос для поиска дел, где текущий этап имеет указанного исполнителя
+        subquery = db.query(DBStage.case_id).filter(
+            and_(
+                DBStage.stage_template_id == DBCase.current_stage,
+                DBStage.executor == executor,
+                DBStage.case_id == DBCase.id
+            )
+        ).exists()
+        query = query.filter(subquery)
 
     # Применяем сортировку
     sort_column = None
@@ -795,20 +814,63 @@ def get_cases(
 
     # Вычисляем пагинацию
     total_count = query.count()
-    total_pages = (total_count + page_size - 1) // page_size  # Округление вверх
+    total_pages = (total_count + page_size - 1) // page_size
     skip = (page - 1) * page_size
 
     # Применяем пагинацию
-    cases = query.offset(skip).limit(page_size).all()
+    db_cases = query.offset(skip).limit(page_size).all()
+
+    # Преобразуем DBCase в CaseResponse
+    cases_response = []
+    for db_case in db_cases:
+        # Преобразуем этапы
+        stages_response = []
+        for stage in db_case.stages:
+            # Преобразуем атрибуты этапа
+            attributes_response = []
+            for attr in stage.attributes:
+                attributes_response.append(AttributeResponse(
+                    id=attr.id,
+                    stage_id=attr.stage_id,
+                    attribute_template_id=attr.attribute_template_id,
+                    user_text=attr.user_text,
+                    user_file_path=attr.user_file_path,
+                    created_at=attr.created_at,
+                    updated_at=attr.updated_at
+                ))
+
+            stages_response.append(StageResponse(
+                id=stage.id,
+                case_id=stage.case_id,
+                stage_template_id=stage.stage_template_id,
+                executor=stage.executor,
+                deadline=stage.deadline,
+                closing_rule=stage.closing_rule,
+                next_stage_rule=stage.next_stage_rule,
+                status=stage.status,
+                completed_at=stage.completed_at,
+                completed_by=stage.completed_by,
+                attributes=attributes_response
+            ))
+
+        case_response = CaseResponse(
+            id=db_case.id,
+            name=db_case.name,
+            case_template_id=db_case.case_template_id,
+            current_stage=db_case.current_stage,
+            status=db_case.status,
+            created_at=db_case.created_at,
+            stages=stages_response
+        )
+        cases_response.append(case_response)
 
     return PaginatedCaseResponse(
-        cases=cases,
+        cases=cases_response,
         total_count=total_count,
         page=page,
         page_size=page_size,
         total_pages=total_pages
     )
-
 # Добавим новый эндпоинт для получения общего количества
 @app.get("/cases/count/")
 def get_cases_count(
@@ -1282,6 +1344,24 @@ def get_case_hierarchy(
     }
 
 
+
+
+
+
+@app.options("/cases/")
+async def options_cases():
+    return JSONResponse(
+        content={"message": "OK"},
+        headers={
+            "Access-Control-Allow-Origin": "http://localhost:5173",
+            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With",
+            "Access-Control-Allow-Credentials": "true",
+        }
+    )
+
+
+
 @app.delete("/attributes/{attribute_id}")
 def delete_attribute(
         attribute_id: int,
@@ -1388,14 +1468,14 @@ def get_executor_stages(
         db: Session = Depends(get_db),
         current_user: dict = Depends(get_current_active_user)
 ):
-    """Получение этапов текущего исполнителя - ТОЛЬКО in_progress и waiting_approval"""
+    """Получение этапов текущего исполнителя - in_progress, waiting_approval и rework"""
     try:
         print(f"Getting stages for executor: {current_user['username']}")
 
-        # ФИЛЬТРАЦИЯ: только этапы со статусом in_progress и waiting_approval
+        # ФИЛЬТРАЦИЯ: этапы со статусом in_progress, waiting_approval и rework
         stages = db.query(DBStage).filter(
             DBStage.executor == current_user['username'],
-            DBStage.status.in_(['in_progress', 'waiting_approval'])  # ДОБАВЛЕНО
+            DBStage.status.in_(['in_progress', 'waiting_approval', 'rework'])
         ).all()
 
         print(f"Found {len(stages)} stages for executor {current_user['username']}")
@@ -1422,7 +1502,6 @@ def get_executor_stages(
     except Exception as e:
         print(f"Error in get_executor_stages: {e}")
         raise HTTPException(status_code=500, detail=f"Ошибка при получении этапов исполнителя: {str(e)}")
-
 
 @app.post("/stages/{stage_id}/complete/")
 def complete_stage(
@@ -1612,6 +1691,146 @@ def create_attributes_batch(
         traceback.print_exc()
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Ошибка при сохранении атрибутов: {str(e)}")
+
+
+@app.get("/manager/pending-stages/", response_model=List[StageWithCaseInfo])
+def get_manager_pending_stages(
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(require_admin_or_manager)
+):
+    """Получение этапов, ожидающих утверждения менеджера"""
+    try:
+        # Находим этапы со статусом waiting_approval и правилом manager_closing
+        stages = db.query(DBStage).join(DBCase).filter(
+            DBStage.status == 'waiting_approval',
+            DBStage.closing_rule == 'manager_closing'
+        ).all()
+
+        result = []
+        for stage in stages:
+            stage_data = StageWithCaseInfo(
+                **stage.__dict__,
+                case_name=stage.case.name,
+                case_id=stage.case.id
+            )
+            result.append(stage_data)
+
+        return result
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ошибка при получении этапов: {str(e)}")
+
+
+@app.post("/stages/{stage_id}/manager-approve/")
+def manager_approve_stage(
+        stage_id: int,
+        approval_data: StageApprovalRequest,
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(require_admin_or_manager)
+):
+    """Утверждение этапа менеджером"""
+    try:
+        stage = db.query(DBStage).filter(DBStage.id == stage_id).first()
+        if not stage:
+            raise HTTPException(status_code=404, detail="Этап не найден")
+
+        if stage.status != 'waiting_approval':
+            raise HTTPException(status_code=400, detail="Этап не ожидает утверждения")
+
+        if stage.closing_rule != 'manager_closing':
+            raise HTTPException(status_code=400, detail="Этот этап не требует утверждения менеджера")
+
+        # Утверждаем этап
+        stage.status = 'completed'
+        stage.completed_by = current_user['username']
+        stage.completed_at = datetime.now()
+        stage.manager_comment = approval_data.comment
+
+        # Логика перехода к следующему этапу
+        case = db.query(DBCase).filter(DBCase.id == stage.case_id).first()
+        if case and case.current_stage == stage.stage_template_id:
+            next_stage_id = None
+
+            if stage.next_stage_rule:
+                next_stage_id = stage.next_stage_rule
+            else:
+                # Автоматический переход к следующему этапу
+                next_stage_id = get_next_stage_number(stage.stage_template_id)
+
+            if next_stage_id:
+                next_stage = db.query(DBStage).filter(
+                    DBStage.case_id == stage.case_id,
+                    DBStage.stage_template_id == next_stage_id
+                ).first()
+
+                if next_stage:
+                    next_stage.status = 'in_progress'
+                    case.current_stage = next_stage_id
+                else:
+                    # Если следующего этапа нет - завершаем дело
+                    case.status = 'completed'
+                    case.current_stage = None
+            else:
+                case.status = 'completed'
+                case.current_stage = None
+
+        db.commit()
+        return {"message": "Этап утвержден", "next_stage": next_stage_id}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Ошибка при утверждении этапа: {str(e)}")
+
+
+@app.get("/attribute-templates/", response_model=List[AttributeTemplateResponse])
+def get_all_attribute_templates(
+    skip: int = 0,
+    limit: int = 1000,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_active_user)
+):
+    """Получение всех шаблонов атрибутов"""
+    templates = db.query(DBAttributeTemplate).offset(skip).limit(limit).all()
+    return templates
+
+
+@app.post("/stages/{stage_id}/manager-rework/")
+def manager_return_for_rework(
+        stage_id: int,
+        approval_data: StageApprovalRequest,  # Тот же самый класс
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(require_admin_or_manager)
+):
+    """Возврат этапа на доработку менеджером"""
+    try:
+        stage = db.query(DBStage).filter(DBStage.id == stage_id).first()
+        if not stage:
+            raise HTTPException(status_code=404, detail="Этап не найден")
+
+        if stage.status != 'waiting_approval':
+            raise HTTPException(status_code=400, detail="Этап не ожидает утверждения")
+
+        if stage.closing_rule != 'manager_closing':
+            raise HTTPException(status_code=400, detail="Этот этап не требует утверждения менеджера")
+
+        if not approval_data.comment:
+            raise HTTPException(status_code=400, detail="Комментарий обязателен при возврате на доработку")
+
+        # Возвращаем на доработку
+        stage.status = 'rework'
+        stage.manager_comment = approval_data.comment
+        db.commit()
+
+        return {"message": "Этап возвращен на доработку"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Ошибка при возврате этапа: {str(e)}")
+
 
 try:
     from minio_setup import setup_minio

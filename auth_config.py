@@ -190,3 +190,4 @@ async def simple_auth(credentials: HTTPAuthorizationCredentials = Depends(securi
     except JWTError as e:
         print(f"JWTError: {str(e)}")
         raise HTTPException(status_code=401, detail=f"Token error: {str(e)}")
+

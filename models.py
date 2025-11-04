@@ -78,14 +78,17 @@ class DBStage(Base):
     deadline = Column(DateTime)
     closing_rule = Column(String)  # 'executor_closing' или 'manager_closing'
     next_stage_rule = Column(Text)  # Условие перехода или номер следующего этапа
-    status = Column(String, default="pending")  # pending, in_progress, completed, cancelled
+    status = Column(String, default="pending")  # pending, in_progress, completed, cancelled, waiting_approval, rework
     completed_at = Column(DateTime, nullable=True)
     completed_by = Column(String, nullable=True)
+    manager_comment = Column(Text, nullable=True)
 
     # Связи
     case = relationship("DBCase", back_populates="stages")
     stage_template = relationship("DBStageTemplate")
     attributes = relationship("DBAttribute", back_populates="stage")
+
+
 
 class DBAttribute(Base):
     __tablename__ = "attributes"
@@ -269,6 +272,16 @@ class StageResponse(StageBase):
         from_attributes = True
 
 
+
+class StageApprovalRequest(BaseModel):
+    approved: bool
+    comment: Optional[str] = None
+
+class StageWithCaseInfo(StageResponse):
+    case_name: Optional[str] = None
+    case_id: Optional[int] = None
+
+
 class CaseBase(BaseModel):
     name: str
     case_template_id: int
@@ -282,6 +295,9 @@ class CaseResponse(CaseBase):
     status: str
     created_at: datetime
     stages: List[StageResponse] = []
+
+    class Config:
+        from_attributes = True
 
 class CaseUpdate(BaseModel):
     name: Optional[str] = None
@@ -330,3 +346,5 @@ class PaginatedCaseResponse(BaseModel):
         from_attributes = True
 
 DBCaseTemplate.case_instances = relationship("DBCase", back_populates="case_template")
+
+
