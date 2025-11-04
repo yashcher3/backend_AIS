@@ -5,9 +5,7 @@ from pydantic import BaseModel, field_validator
 from typing import List, Optional
 from datetime import datetime
 
-
 Base = declarative_base()
-
 
 class DBCaseTemplate(Base):
     __tablename__ = "case_templates"
