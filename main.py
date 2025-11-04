@@ -1640,40 +1640,6 @@ async def options_rework_submit():
     )
 
 
-#
-# @app.delete("/attributes/{attribute_id}")
-# def delete_attribute(
-#         attribute_id: int,
-#         db: Session = Depends(get_db),
-#         current_user: dict = Depends(get_current_active_user)
-# ):
-#     """Удаление атрибута"""
-#     attribute = db.query(DBAttribute).filter(DBAttribute.id == attribute_id).first()
-#     if not attribute:
-#         raise HTTPException(status_code=404, detail="Атрибут не найден")
-#
-#     # Проверяем права доступа через этап
-#     stage = db.query(DBStage).filter(DBStage.id == attribute.stage_id).first()
-#     if not stage:
-#         raise HTTPException(status_code=404, detail="Этап не найден")
-#
-#     if stage.executor != current_user['username']:
-#         raise HTTPException(status_code=403, detail="Нет доступа к этому атрибуту")
-#
-#     try:
-#         # Удаляем файл из хранилища если есть
-#         if attribute.user_file_path:
-#             get_s3_storage().delete_file(attribute.user_file_path)
-#
-#         db.delete(attribute)
-#         db.commit()
-#
-#         return {"message": "Атрибут удален"}
-#
-#     except Exception as e:
-#         db.rollback()
-#         raise HTTPException(status_code=500, detail=f"Ошибка при удалении атрибута: {str(e)}")
-
 
 @app.get("/stages/{stage_id}/attributes/")
 def get_stage_attributes(
