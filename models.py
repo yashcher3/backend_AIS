@@ -10,21 +10,21 @@ Base = declarative_base()
 
 
 class DBCaseTemplate(Base):
-    __tablename__ = "case_templates"  # БЫЛО: "cases"
+    __tablename__ = "case_templates"
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False)
     description = Column(Text)
-    stages_list = Column(Text)  # JSON список ID этапов
+    stages_list = Column(Text)
 
     stages = relationship("DBStageTemplate", back_populates="case_template")
 
 
 class DBStageTemplate(Base):
-    __tablename__ = "stage_templates"  # БЫЛО: "stages"
+    __tablename__ = "stage_templates"
 
-    id = Column(String, primary_key=True, index=True)  # формат: {case_id}.{stage_number}
-    case_template_id = Column(Integer, ForeignKey('case_templates.id'))  # БЫЛО: case_id
+    id = Column(String, primary_key=True, index=True)
+    case_template_id = Column(Integer, ForeignKey('case_templates.id'))
     name_stage = Column(String, nullable=False)
     file_fields = Column(Integer, default=0)
     text_fields = Column(Integer, default=0)
@@ -32,7 +32,7 @@ class DBStageTemplate(Base):
     duration = Column(String)
     condition = Column(Text, nullable=True)
 
-    case_template = relationship("DBCaseTemplate", back_populates="stages")  # БЫЛО: case
+    case_template = relationship("DBCaseTemplate", back_populates="stages")
     attribute_templates = relationship("DBAttributeTemplate", back_populates="stage_template")
 
 
@@ -40,19 +40,15 @@ class DBAttributeTemplate(Base):
     __tablename__ = "attribute_templates"
 
     id = Column(Integer, primary_key=True, index=True)
-    stage_template_id = Column(String, ForeignKey('stage_templates.id'))  # БЫЛО: stage_id
-    field_type = Column(String)  # 'file_field', 'text_field'
-    field_index = Column(Integer)  # Номер поля (1, 2, 3...)
-    label = Column(String)  # Подпись/название поля
+    stage_template_id = Column(String, ForeignKey('stage_templates.id'))
+    field_type = Column(String)
+    field_index = Column(Integer)
+    label = Column(String)
     created_at = Column(DateTime, default=datetime.utcnow)
 
-    stage_template = relationship("DBStageTemplate", back_populates="attribute_templates")  # БЫЛО: stage
+    stage_template = relationship("DBStageTemplate", back_populates="attribute_templates")
 
 
-
-
-
-# В models.py в классе DBCase добавьте/проверьте:
 class DBCase(Base):
     __tablename__ = "cases"
 
@@ -76,9 +72,9 @@ class DBStage(Base):
     stage_template_id = Column(String, ForeignKey('stage_templates.id'))
     executor = Column(String)  # Логин исполнителя
     deadline = Column(DateTime)
-    closing_rule = Column(String)  # 'executor_closing' или 'manager_closing'
-    next_stage_rule = Column(Text)  # Условие перехода или номер следующего этапа
-    status = Column(String, default="pending")  # pending, in_progress, completed, cancelled, waiting_approval, rework
+    closing_rule = Column(String)
+    next_stage_rule = Column(Text)
+    status = Column(String, default="pending")
     completed_at = Column(DateTime, nullable=True)
     completed_by = Column(String, nullable=True)
     manager_comment = Column(Text, nullable=True)
@@ -105,10 +101,6 @@ class DBAttribute(Base):
     stage = relationship("DBStage", back_populates="attributes")
     attribute_template = relationship("DBAttributeTemplate")
 
-
-
-
-
 class DBExecutor(Base):
     __tablename__ = "executors"
 
@@ -118,8 +110,6 @@ class DBExecutor(Base):
     expert_area = Column(String)
     created_by = Column(String)
 
-
-# Pydantic модели для API - ОБНОВЛЕНЫ СВЯЗИ
 class AttributeTemplateBase(BaseModel):
     field_type: str
     field_index: int
@@ -127,15 +117,15 @@ class AttributeTemplateBase(BaseModel):
 
 
 class AttributeTemplateCreate(AttributeTemplateBase):
-    stage_template_id: str  # БЫЛО: stage_id
+    stage_template_id: str
 
 
 class AttributeTemplateResponse(AttributeTemplateBase):
     id: int
-    stage_template_id: str  # БЫЛО: stage_id
+    stage_template_id: str
 
 
-class StageTemplateBase(BaseModel):  # БЫЛО: StageBase
+class StageTemplateBase(BaseModel):
     id: str
     name_stage: str
     file_fields: int = 0
@@ -163,28 +153,27 @@ class StageTemplateBase(BaseModel):  # БЫЛО: StageBase
         from_attributes = True
 
 
-class StageTemplateWithTemplates(StageTemplateBase):  # БЫЛО: StageWithTemplates
+class StageTemplateWithTemplates(StageTemplateBase):
     attribute_templates: List[AttributeTemplateResponse] = []
 
 
-class StageTemplateCreate(StageTemplateBase):  # БЫЛО: StageCreate
+class StageTemplateCreate(StageTemplateBase):
     pass
 
 
-class StageTemplateResponse(StageTemplateBase):  # БЫЛО: StageResponse
-    case_template_id: int  # БЫЛО: case_id
+class StageTemplateResponse(StageTemplateBase):
+    case_template_id: int
 
 
 class CaseTemplateBase(BaseModel):  # БЫЛО: CaseBase
     name: str
     description: str
 
+class CaseTemplateCreate(CaseTemplateBase):
+    stages: List[StageTemplateBase]
 
-class CaseTemplateCreate(CaseTemplateBase):  # БЫЛО: CaseCreate
-    stages: List[StageTemplateBase]  # БЫЛО: StageBase
 
-
-class CaseTemplateResponse(CaseTemplateBase):  # БЫЛО: CaseResponse
+class CaseTemplateResponse(CaseTemplateBase):
     id: int
     stages_list: str
 
@@ -192,10 +181,8 @@ class CaseTemplateResponse(CaseTemplateBase):  # БЫЛО: CaseResponse
 class ExportData(BaseModel):
     name: str
     description: str
-    stages: List[StageTemplateWithTemplates]  # БЫЛО: StageWithTemplates
+    stages: List[StageTemplateWithTemplates]
 
-
-# Модели для исполнителей (без изменений)
 class ExecutorBase(BaseModel):
     login: str
     full_name: str
@@ -211,10 +198,6 @@ class ExecutorResponse(ExecutorBase):
     class Config:
         from_attributes = True
 
-
-
-
-
 class CaseSimple(BaseModel):
     id: int
     name: str
@@ -222,9 +205,6 @@ class CaseSimple(BaseModel):
 
     class Config:
         from_attributes = True
-
-
-
 
 class AttributeBase(BaseModel):
     attribute_template_id: int
@@ -258,7 +238,6 @@ class CaseSimple(BaseModel):
     class Config:
         from_attributes = True
 
-# Затем обновите StageResponse
 class StageResponse(StageBase):
     id: int
     case_id: int
@@ -271,7 +250,6 @@ class StageResponse(StageBase):
 
     class Config:
         from_attributes = True
-
 
 class StageApprovalRequest(BaseModel):
     approved: bool
@@ -317,7 +295,6 @@ class AttributeUpdate(BaseModel):
     user_text: Optional[str] = None
     user_file_path: Optional[str] = None
 
-# Модели для поиска/фильтрации
 class CaseFilter(BaseModel):
     name: Optional[str] = None
     case_template_id: Optional[int] = None
@@ -329,14 +306,10 @@ class StageFilter(BaseModel):
     status: Optional[str] = None
     executor: Optional[str] = None
 
-# Модель для загрузки файлов
 class FileUploadResponse(BaseModel):
     filename: str
     file_url: str
     file_path: str
-# Обновляем существующие модели для связей
-
-
 
 class PaginatedCaseResponse(BaseModel):
     cases: List[CaseResponse]
