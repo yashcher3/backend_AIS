@@ -279,7 +279,10 @@ class StageApprovalRequest(BaseModel):
 
 class StageWithCaseInfo(StageResponse):
     case_name: Optional[str] = None
-    case_id: Optional[int] = None
+    # case_id: Optional[int] = None
+
+    class Config:
+        from_attributes = True
 
 
 class CaseBase(BaseModel):

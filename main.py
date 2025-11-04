@@ -96,6 +96,30 @@ async def options_handler():
         }
     )
 
+@app.options("/manager/pending-stages/")
+async def options_manager_pending_stages():
+    return JSONResponse(
+        content={"message": "OK"},
+        headers={
+            "Access-Control-Allow-Origin": "http://localhost:5173",
+            "Access-Control-Allow-Methods": "GET, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With",
+            "Access-Control-Allow-Credentials": "true",
+        }
+    )
+
+@app.options("/attribute-templates/")
+async def options_attribute_templates():
+    return JSONResponse(
+        content={"message": "OK"},
+        headers={
+            "Access-Control-Allow-Origin": "http://localhost:5173",
+            "Access-Control-Allow-Methods": "GET, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With",
+            "Access-Control-Allow-Credentials": "true",
+        }
+    )
+
 async def simple_auth(credentials: HTTPAuthorizationCredentials = Depends(security)):
     """Упрощенная авторизация для тестирования"""
     print(f"=== SIMPLE_AUTH CALLED ===")
@@ -1696,10 +1720,17 @@ def create_attributes_batch(
 @app.get("/manager/pending-stages/", response_model=List[StageWithCaseInfo])
 def get_manager_pending_stages(
         db: Session = Depends(get_db),
-        current_user: dict = Depends(require_admin_or_manager)
+        current_user: dict = Depends(get_current_active_user)
+        # ИЗМЕНЕНО: используем get_current_active_user вместо require_admin_or_manager
 ):
     """Получение этапов, ожидающих утверждения менеджера"""
     try:
+        # ДОБАВЛЕНО: проверка прав вручную
+        if current_user['role'] not in ['admin', 'manager']:
+            raise HTTPException(status_code=403, detail="Недостаточно прав")
+
+        print(f"Manager {current_user['username']} viewing pending stages")
+
         # Находим этапы со статусом waiting_approval и правилом manager_closing
         stages = db.query(DBStage).join(DBCase).filter(
             DBStage.status == 'waiting_approval',
@@ -1708,26 +1739,44 @@ def get_manager_pending_stages(
 
         result = []
         for stage in stages:
+            # Создаем объект StageWithCaseInfo без дублирования case_id
             stage_data = StageWithCaseInfo(
-                **stage.__dict__,
-                case_name=stage.case.name,
-                case_id=stage.case.id
+                id=stage.id,
+                case_id=stage.case_id,
+                stage_template_id=stage.stage_template_id,
+                executor=stage.executor,
+                deadline=stage.deadline,
+                closing_rule=stage.closing_rule,
+                next_stage_rule=stage.next_stage_rule,
+                status=stage.status,
+                completed_at=stage.completed_at,
+                completed_by=stage.completed_by,
+                manager_comment=stage.manager_comment,
+                case_name=stage.case.name if stage.case else f"Дело #{stage.case_id}",
+                attributes=[]
             )
             result.append(stage_data)
 
+        print(f"Found {len(result)} stages pending approval")
         return result
 
     except Exception as e:
+        print(f"Error in get_manager_pending_stages: {str(e)}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Ошибка при получении этапов: {str(e)}")
-
 
 @app.post("/stages/{stage_id}/manager-approve/")
 def manager_approve_stage(
-        stage_id: int,
-        approval_data: StageApprovalRequest,
-        db: Session = Depends(get_db),
-        current_user: dict = Depends(require_admin_or_manager)
+    stage_id: int,
+    approval_data: StageApprovalRequest,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_active_user)  # ИЗМЕНЕНО
 ):
+    """Утверждение этапа менеджером"""
+    # ДОБАВЛЕНО: проверка прав
+    if current_user['role'] not in ['admin', 'manager']:
+        raise HTTPException(status_code=403, detail="Недостаточно прав")
     """Утверждение этапа менеджером"""
     try:
         stage = db.query(DBStage).filter(DBStage.id == stage_id).first()
@@ -1795,15 +1844,18 @@ def get_all_attribute_templates(
     templates = db.query(DBAttributeTemplate).offset(skip).limit(limit).all()
     return templates
 
-
 @app.post("/stages/{stage_id}/manager-rework/")
 def manager_return_for_rework(
-        stage_id: int,
-        approval_data: StageApprovalRequest,  # Тот же самый класс
-        db: Session = Depends(get_db),
-        current_user: dict = Depends(require_admin_or_manager)
+    stage_id: int,
+    approval_data: StageApprovalRequest,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_active_user)  # ИЗМЕНЕНО
 ):
     """Возврат этапа на доработку менеджером"""
+    # ДОБАВЛЕНО: проверка прав
+    if current_user['role'] not in ['admin', 'manager']:
+        raise HTTPException(status_code=403, detail="Недостаточно прав")
+
     try:
         stage = db.query(DBStage).filter(DBStage.id == stage_id).first()
         if not stage:
