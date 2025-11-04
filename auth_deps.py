@@ -7,11 +7,7 @@ from auth_models import TokenData
 security = HTTPBearer()
 
 
-
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    print(f"=== GET_CURRENT_USER CALLED ===")
-    print(f"Token: {credentials.credentials}")
-
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Неверные учетные данные",
@@ -19,31 +15,22 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     )
     try:
         payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM])
-        print(f"Decoded payload: {payload}")
 
         username: str = payload.get("sub")
         role: str = payload.get("role")
-        print(f"Username from token: {username}")
-        print(f"Role from token: {role}")
 
         if username is None:
-            print("Username is None - raising exception")
             raise credentials_exception
         token_data = TokenData(username=username, role=role)
-        print(f"Token data created: {token_data}")
 
-    except JWTError as e:
-        print(f"JWTError in get_current_user: {str(e)}")
+    except JWTError:
         raise credentials_exception
 
     user = get_user(username=token_data.username)
-    print(f"User from get_user: {user}")
 
     if user is None:
-        print(f"User {token_data.username} not found - raising exception")
         raise credentials_exception
 
-    print(f"=== GET_CURRENT_USER SUCCESS - Returning user ===")
     return user
 
 
@@ -63,5 +50,3 @@ def require_role(required_role: str):
         return current_user
 
     return role_checker
-
-
