@@ -12,8 +12,7 @@ def get_next_stage(current_stage: str, condition_result: Optional[str] = None) -
     if condition_result:
 
         try:
-            # Простая реализация - предполагаем, что condition_result уже содержит следующий этап
-            if re.match(r'^\d+(\.\d+)*$', condition_result):
+           if re.match(r'^\d+(\.\d+)*$', condition_result):
                 return condition_result
         except:
             pass
@@ -26,4 +25,4 @@ def get_next_stage(current_stage: str, condition_result: Optional[str] = None) -
 
 def validate_stage_format(stage: str) -> bool:
     return bool(re.match(r'^\d+(\.\d+)*$', stage))
-# /home/maxim/PycharmProjects/Backend_AIS/data/flowchart.db
+

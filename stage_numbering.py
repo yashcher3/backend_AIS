@@ -46,7 +46,6 @@ def get_stage_hierarchy(stages: List[str]) -> dict:
         parts = parse_stage_number(stage)
 
         if len(parts) == 1:
-            # Корневой уровень
             hierarchy[stage] = {"children": []}
         else:
             parent_parts = parts[:-1]

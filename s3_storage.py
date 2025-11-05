@@ -37,7 +37,6 @@ class S3Storage:
             self.s3_client.list_buckets()
             logger.info("S3 клиент успешно инициализирован")
 
-            # Создаем bucket если не существует
             self._ensure_bucket_exists()
             self.available = True
 
@@ -186,7 +185,6 @@ s3_storage = None
 
 
 def get_s3_storage():
-    """Получает экземпляр S3Storage с отложенной инициализацией"""
     global s3_storage
     if s3_storage is None:
         s3_storage = S3Storage()

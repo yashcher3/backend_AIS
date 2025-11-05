@@ -44,7 +44,7 @@ from auth_deps import get_current_active_user, require_role
 from fastapi.middleware.cors import CORSMiddleware
 from stage_numbering import get_next_stage_number, get_stage_hierarchy
 
-# Создаем таблицы
+
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Case Management API")
