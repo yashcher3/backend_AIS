@@ -649,6 +649,7 @@ def create_case(
         raise HTTPException(status_code=500, detail=f"Ошибка при создании дела: {str(e)}")
 
 
+
 @app.get("/cases/", response_model=PaginatedCaseResponse)
 def get_cases(
         page: int = Query(1, ge=1),
@@ -657,16 +658,21 @@ def get_cases(
         case_template_id: Optional[int] = None,
         status: Optional[str] = None,
         executor: Optional[str] = None,
+        deadline_filter: Optional[str] = Query(None),  # ДОБАВЛЕНО: фильтр по дедлайну
         sort_by: Optional[str] = Query("id"),
         sort_order: Optional[str] = Query("desc"),
         db: Session = Depends(get_db),
         current_user: dict = Depends(get_current_active_user)
 ):
+    """Получение списка дел с пагинацией, сортировкой и фильтрацией"""
     from sqlalchemy.orm import joinedload
     from sqlalchemy import and_
+    from datetime import datetime, timedelta
 
+    # Базовый запрос с подгрузкой этапов
     query = db.query(DBCase).options(joinedload(DBCase.stages))
 
+    # Применяем фильтры
     if name:
         query = query.filter(DBCase.name.ilike(f"%{name}%"))
     if case_template_id:
@@ -674,7 +680,9 @@ def get_cases(
     if status:
         query = query.filter(DBCase.status == status)
 
+    # ИЗМЕНЕНИЕ: Фильтрация по исполнителю ТЕКУЩЕГО этапа
     if executor and executor != 'all':
+        # Создаем подзапрос для поиска дел, где текущий этап имеет указанного исполнителя
         subquery = db.query(DBStage.case_id).filter(
             and_(
                 DBStage.stage_template_id == DBCase.current_stage,
@@ -684,6 +692,38 @@ def get_cases(
         ).exists()
         query = query.filter(subquery)
 
+    # ДОБАВЛЕНО: Фильтрация по дедлайну текущего этапа
+    if deadline_filter and deadline_filter != 'all':
+        now = datetime.now()
+
+        # Находим текущие этапы дел
+        subquery = db.query(DBStage.case_id).filter(
+            and_(
+                DBStage.stage_template_id == DBCase.current_stage,
+                DBStage.case_id == DBCase.id
+            )
+        )
+
+        if deadline_filter == 'overdue':
+            # Просроченные: дедлайн меньше текущего времени
+            subquery = subquery.filter(DBStage.deadline < now)
+        elif deadline_filter == 'soon':
+            # Скоро просроченные: дедлайн в течение 3 дней
+            three_days_later = now + timedelta(days=3)
+            subquery = subquery.filter(
+                and_(
+                    DBStage.deadline >= now,
+                    DBStage.deadline <= three_days_later
+                )
+            )
+        elif deadline_filter == 'safe':
+            # Без угрозы: дедлайн более чем через 3 дня
+            three_days_later = now + timedelta(days=3)
+            subquery = subquery.filter(DBStage.deadline > three_days_later)
+
+        query = query.filter(subquery.exists())
+
+    # Применяем сортировку
     sort_column = None
     if sort_by == "id":
         sort_column = DBCase.id
@@ -703,18 +743,24 @@ def get_cases(
             sort_column = sort_column.asc()
         query = query.order_by(sort_column)
     else:
+        # Сортировка по умолчанию
         query = query.order_by(DBCase.id.desc())
 
+    # Вычисляем пагинацию
     total_count = query.count()
     total_pages = (total_count + page_size - 1) // page_size
     skip = (page - 1) * page_size
 
+    # Применяем пагинацию
     db_cases = query.offset(skip).limit(page_size).all()
 
+    # Преобразуем DBCase в CaseResponse
     cases_response = []
     for db_case in db_cases:
+        # Преобразуем этапы
         stages_response = []
         for stage in db_case.stages:
+            # Преобразуем атрибуты этапа
             attributes_response = []
             for attr in stage.attributes:
                 attributes_response.append(AttributeResponse(
@@ -759,6 +805,9 @@ def get_cases(
         page_size=page_size,
         total_pages=total_pages
     )
+
+
+
 
 
 @app.get("/cases/count/")
